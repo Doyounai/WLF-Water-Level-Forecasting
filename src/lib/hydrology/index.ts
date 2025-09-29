@@ -34,22 +34,29 @@ export const muskingumRouting = (
 };
 
 /**
- * Simple 1-hour-ahead forecast using:
- *  - inflowForecastMethod: "persistence" | "linear" | "ar1"
- *  - muskingum parameters: K, X, dt (hours)
- *  - ratingCurve: { type: 'power', a, b, h0 }  // Q = a*(h-h0)^b
+ * Forecast n hours ahead using Muskingum routing.
  *
  * Inputs:
- *  inflows: array of recent inflow values [I_{t-N+1}, ..., I_t]
- *  lastOutflow: O_t (most recent observed or routed outflow)
+ *  - inflows: array of past inflows [I_{t-m+1} ... I_t] (m >= 2 recommended)
+ *  - lastOutflow: O_t (most recently observed or last routed)
+ *  - K, X, dt: Muskingum params (dt in same units as K, e.g., hours)
+ *  - n: number of hours to forecast (integer)
+ *  - inflowMethod: "persistence" | "linear" | "ar1" | "moving_avg"
+ *  - inflowParams: optional object for method parameters (e.g., window for moving_avg)
+ *  - ratingCurve: optional { type: 'power', a, b, h0 } for Q->h conversion
+ *
+ * Returns:
+ *  { inflow_forecast: [...], outflow_forecast: [...], stage_forecast: [...], coeffs }
  */
-export const forecastNextHour = (props: {
+export const forecastNHours = (props: {
   inflows: number[];
   lastOutflow: number;
   K: number;
   X: number;
   dt: number;
-  inflowForecastMethod: string | 'persistence';
+  n: number | 1;
+  inflowMethod: string | 'persistence';
+  inflowParams?: any;
   ratingCurve: any;
 }) => {
   const {
@@ -57,74 +64,93 @@ export const forecastNextHour = (props: {
     lastOutflow,
     K,
     X,
-    dt,
-    inflowForecastMethod = 'persistence',
+    dt = 1,
+    n = 1,
+    inflowMethod = 'persistence',
+    inflowParams = {},
     ratingCurve = null,
   } = props;
 
-  if (!inflows || inflows.length < 2) {
-    throw new Error(
-      'Need at least 2 inflow points for better methods; persistence can work with 1.',
-    );
+  if (!Array.isArray(inflows) || inflows.length < 1) {
+    throw new Error('Provide at least one inflow value.');
   }
-
-  const I_t = inflows[inflows.length - 1];
-  const I_tm1 = inflows[inflows.length - 2];
-
-  // 1) forecast I_{t+1}
-  let I_tp1;
-  switch (inflowForecastMethod) {
-    case 'linear':
-      I_tp1 = I_t + (I_t - I_tm1); // two-point linear
-      break;
-    case 'ar1': {
-      // estimate phi from last few points via simple OLS (phi = sum(It*It-1)/sum(It-1^2))
-      let num = 0,
-        den = 0;
-      for (let i = 1; i < inflows.length; i++) {
-        num += inflows[i] * inflows[i - 1];
-        den += inflows[i - 1] * inflows[i - 1];
-      }
-      const phi = den === 0 ? 0 : num / den;
-      I_tp1 = phi * I_t;
-      break;
-    }
-    case 'persistence':
-    default:
-      I_tp1 = I_t;
-  }
-
-  // ensure non-negative
-  if (I_tp1 < 0) I_tp1 = 0;
-
-  // 2) Muskingum coefficients
+  // compute Muskingum coefficients once (assumed constant)
   const denom = K * (1 - X) + 0.5 * dt;
   const C0 = (-K * X + 0.5 * dt) / denom;
   const C1 = (K * X + 0.5 * dt) / denom;
   const C2 = (K * (1 - X) - 0.5 * dt) / denom;
 
-  // 3) route to get O_{t+1}
-  const O_tp1 = C0 * I_tp1 + C1 * I_t + C2 * lastOutflow;
+  // helper: simple inflow forecast for single step based on method and history
+  function forecastNextInflow(history: number[]) {
+    const m = history.length;
+    const It = history[m - 1];
+    const Itm1 = history[m - 2] ?? history[m - 1];
 
-  // 4) convert to stage if rating curve provided
-  let h_tp1 = null;
-  if (ratingCurve) {
-    if (ratingCurve.type === 'power') {
-      const { a, b, h0 = 0 } = ratingCurve;
-      if (a > 0 && b !== 0 && O_tp1 >= 0) {
-        h_tp1 = h0 + Math.pow(O_tp1 / a, 1 / b);
+    switch (inflowMethod) {
+      case 'linear':
+        return Math.max(0, It + (It - Itm1)); // two-point linear extrapolation
+      case 'ar1': {
+        // estimate phi from history: phi = sum(It * It-1) / sum(It-1^2)
+        if (m < 2) return It;
+        let num = 0,
+          den = 0;
+        for (let i = 1; i < m; i++) {
+          num += history[i] * history[i - 1];
+          den += history[i - 1] * history[i - 1];
+        }
+        const phi = den === 0 ? 0 : num / den;
+        return Math.max(0, phi * It);
       }
-    } else if (ratingCurve.type === 'polynomial') {
-      // ratingCurve.coeffs: [c0, c1, c2, ...] where Q = c0 + c1*h + c2*h^2 ...
-      // Inversion requires numeric solve (Newton). Implement if needed.
-      h_tp1 = null; // implement numeric invert if you have polynomial
+      case 'moving_avg': {
+        const w = inflowParams.window || Math.min(3, m);
+        const slice = history.slice(-w);
+        const avg = slice.reduce((s, v) => s + v, 0) / slice.length;
+        return Math.max(0, avg);
+      }
+      case 'persistence':
+      default:
+        return Math.max(0, It); // persistence
     }
   }
 
+  // prepare arrays
+  const inflowForecast = [];
+  const outflowForecast = [];
+  const stageForecast = [];
+
+  // copy mutable history for iterative forecasting (so we can append generated inflows)
+  const histInflows = inflows.slice();
+  let prevOutflow =
+    typeof lastOutflow === 'number' ? lastOutflow : histInflows[histInflows.length - 1];
+
+  for (let k = 1; k <= n; k++) {
+    const I_next = forecastNextInflow(histInflows);
+    // Muskingum routing formula: O_{t+1} = C0*I_{t+1} + C1*I_t + C2*O_t
+    const I_t = histInflows[histInflows.length - 1];
+    const O_next = C0 * I_next + C1 * I_t + C2 * prevOutflow;
+
+    inflowForecast.push(I_next);
+    outflowForecast.push(O_next);
+
+    // convert to stage if rating curve provided
+    let h_next = null;
+    if (ratingCurve && ratingCurve.type === 'power') {
+      const { a, b, h0 = 0 } = ratingCurve;
+      if (a > 0 && b !== 0 && O_next >= 0) {
+        h_next = h0 + Math.pow(O_next / a, 1 / b);
+      }
+    }
+    stageForecast.push(h_next);
+
+    // append to history for multi-step forecasting
+    histInflows.push(I_next);
+    prevOutflow = O_next;
+  }
+
   return {
-    inflow_forecast: I_tp1,
-    outflow_forecast: O_tp1,
-    stage_forecast: h_tp1,
+    inflow_forecast: inflowForecast,
+    outflow_forecast: outflowForecast,
+    stage_forecast: stageForecast,
     muskingum_coeffs: { C0, C1, C2 },
   };
 };
@@ -153,3 +179,111 @@ export const fitPowerLogLinear = (h: number[], Q: number[], h0 = 0) => {
   const a = Math.exp(lnA);
   return { a, b, h0 };
 };
+
+//
+
+// muskingum routing single pass
+function muskingumRouteStep(
+  I_next: number,
+  I_t: number,
+  O_t: number,
+  K: number,
+  X: number,
+  dt: number,
+): number {
+  const denom = K * (1 - X) + 0.5 * dt;
+  const C0 = (-K * X + 0.5 * dt) / denom;
+  const C1 = (K * X + 0.5 * dt) / denom;
+  const C2 = (K * (1 - X) - 0.5 * dt) / denom;
+  const O_next = C0 * I_next + C1 * I_t + C2 * O_t;
+  return O_next;
+}
+
+interface RatingCurvePower {
+  type: 'power';
+  a: number;
+  b: number;
+  h0?: number;
+}
+
+interface ForecastP1FromP67Params {
+  inflows: number[];
+  lastOutflow: number;
+  K: number;
+  X: number;
+  dt?: number;
+  n?: number;
+  inflowMethod?: 'persistence' | 'linear' | 'ar1';
+  ratingCurveP1?: RatingCurvePower | null;
+}
+
+/**
+ * Forecast P1 from P67
+ * @param params - Forecast parameters
+ * @returns Object with inflow, outflow, and stage forecasts
+ */
+export function forecastP1FromP67({
+  inflows,
+  lastOutflow,
+  K,
+  X,
+  dt = 1,
+  n = 6,
+  inflowMethod = 'persistence',
+  ratingCurveP1 = null,
+}: ForecastP1FromP67Params): {
+  inflow_forecast: number[];
+  outflow_forecast: number[];
+  stage_forecast: (number | null)[];
+} {
+  const hist = inflows.slice();
+  let Oprev = lastOutflow;
+  const Iseries: number[] = [];
+  const Oseries: number[] = [];
+  const Hseries: (number | null)[] = [];
+
+  function forecastNextInflow(history: number[]): number {
+    const m = history.length;
+    const It = history[m - 1];
+    const Itm1 = history[m - 2] ?? It;
+    if (inflowMethod === 'linear') return Math.max(0, It + (It - Itm1));
+    if (inflowMethod === 'ar1') {
+      if (m < 2) return It;
+      let num = 0,
+        den = 0;
+      for (let i = 1; i < m; i++) {
+        num += history[i] * history[i - 1];
+        den += history[i - 1] * history[i - 1];
+      }
+      const phi = den === 0 ? 0 : num / den;
+      return Math.max(0, phi * It);
+    }
+    return Math.max(0, It);
+  }
+
+  for (let k = 1; k <= n; k++) {
+    const I_next = forecastNextInflow(hist);
+    const I_t = hist[hist.length - 1];
+    const O_next = muskingumRouteStep(I_next, I_t, Oprev, K, X, dt);
+
+    Iseries.push(I_next);
+    Oseries.push(O_next);
+
+    // convert Q->stage if ratingCurve provided {type:'power',a,b,h0}
+    if (ratingCurveP1 && ratingCurveP1.type === 'power') {
+      const { a, b, h0 = 0 } = ratingCurveP1;
+      Hseries.push(O_next >= 0 ? h0 + Math.pow(O_next / a, 1.0 / b) : null);
+    } else {
+      Hseries.push(null);
+    }
+
+    hist.push(I_next);
+    Oprev = O_next;
+  }
+
+  return {
+    inflow_forecast: Iseries,
+    outflow_forecast: Oseries,
+    stage_forecast: Hseries,
+  };
+}
