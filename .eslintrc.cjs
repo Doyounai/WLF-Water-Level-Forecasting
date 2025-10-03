@@ -70,7 +70,7 @@ module.exports = {
     '@typescript-eslint/explicit-function-return-type': 'off',
     'simple-import-sort/imports': 'error',
     'simple-import-sort/exports': 'error',
-    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-explicit-any': 'off',
     // Custom Setting
     'jsx-a11y/anchor-is-valid': 'off',
     '@typescript-eslint/no-unused-vars': 'warn',

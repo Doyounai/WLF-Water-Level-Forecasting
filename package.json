@@ -11,6 +11,7 @@
   "dependencies": {
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
+    "ml-levenberg-marquardt": "^1.0.0",
     "next": "15.5.4",
     "prettier": "^3.6.2",
     "react": "19.1.0",
