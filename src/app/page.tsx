@@ -32,7 +32,7 @@ export default function Home() {
   const result = dynamicRouteAndForecastN(
     { upstream, downstream, dtSeconds },
     {
-      nSteps: 13,
+      nSteps: 12,
       inflowMethod: 'persistence',
       expAlpha: 0.35,
       maxInflowChangePct: 0.12,
@@ -55,6 +55,8 @@ export default function Home() {
 
   console.log('Forecast : ', result.forecasts);
 
+  const time = ["12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"];
+
   return (
     <div className="min-h-screen space-y-8 bg-gray-50 p-8">
       <h1 className="font-bold text-3xl text-gray-800">
@@ -62,7 +64,7 @@ export default function Home() {
       </h1>
 
       {/* Error summary */}
-      <div className="bg-white rounded-lg border-l-4 border-blue-600 shadow-md p-6">
+      {/* <div className="bg-white rounded-lg border-l-4 border-blue-600 shadow-md p-6">
         <h2 className="font-semibold text-xl mb-4 text-blue-700">สรุปค่าคลาดเคลื่อน</h2>
         <div className="font-medium grid text-gray-700 gap-4 grid-cols-3">
           <p>
@@ -75,7 +77,7 @@ export default function Home() {
             <span className="font-bold text-red-600">Bias:</span> {err.bias.toFixed(2)} m
           </p>
         </div>
-      </div>
+      </div> */}
 
       {/* Table */}
       <div className="bg-white rounded-lg shadow-md p-6">
@@ -85,8 +87,8 @@ export default function Home() {
             <tr className="bg-blue-100 text-blue-800">
               <th className="border text-left py-2 px-3">เวลา</th>
               <th className="border text-center py-2 px-3">Predicted (m)</th>
-              <th className="border text-center py-2 px-3">Observed (m)</th>
-              <th className="border text-center py-2 px-3">Error (m)</th>
+              {/* <th className="border text-center py-2 px-3">Observed (m)</th>
+              <th className="border text-center py-2 px-3">Error (m)</th> */}
             </tr>
           </thead>
           <tbody>
@@ -95,11 +97,12 @@ export default function Home() {
               const errVal = obs !== null ? (f.h_m - obs).toFixed(2) : '-';
               return (
                 <tr key={i} className={i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                  <td className="border py-2 px-3">{f.t}</td>
+                  {/* <td className="border py-2 px-3">{f.t}</td> */}
+                  <td className="border py-2 px-3">{time[i]}</td>
                   <td className="border font-semibold text-center py-2 px-3 text-blue-700">
                     {f.h_m.toFixed(2)}
                   </td>
-                  <td className="border font-semibold text-center py-2 px-3 text-green-700">
+                  {/* <td className="border font-semibold text-center py-2 px-3 text-green-700">
                     {obs?.toFixed(2)}
                   </td>
                   <td
@@ -108,7 +111,7 @@ export default function Home() {
                     }`}
                   >
                     {errVal}
-                  </td>
+                  </td> */}
                 </tr>
               );
             })}
